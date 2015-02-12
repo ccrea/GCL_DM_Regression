@@ -1,0 +1,800 @@
+#######################################################################                                                                                            
+#Author: Cathy Crea                                                                                               
+#Updated By: Cathy Crea										  
+#Date Modified: 17-Oct-14                                                                                         
+#######################################################################
+
+init.par=function(formula, data, disp, plant, poll, delta.vars, method){
+   ####################################################################
+   # This function runs a poisson regression to get initial parameter   
+   # estimates for the GCL and DM models. 
+   # Inputs are passed from main function 'dirmultreg'.
+   #
+   #Input:  formula    = a symbolic description of the model to be fitted 
+   #                     which has the form response ~ terms, where response   
+   #                     is the (numeric) response vector and terms is a series 
+   #                     of covariates which specifies a linear predictor for response, 
+   #                     e.g., x1 + x2 indicates all the terms in first together 
+   #                     with all the terms in second. 
+   #        data       = a data set containing the variables in the model as shown above.  
+   #                     Note these data must be an R object of class 'data.frame'.
+   #        disp       = dispersion structure to use:
+   #                   { "none"   = no dispersion; 
+   #                   { "dconst" = delta.g constant;
+   #                   { "dfunc"  = delta.g function of Z; 
+   #                   { "rconst" = rho.g constant.
+   #        plant      = group identifier for plant species
+   #        poll       = group identifier for pollinator species
+   #        delta.vars = specifies the variables used to model dispersion as a function of covariates
+   #        method     = quasi-Newton optimization method to be used:
+   #                   { "Nelder-Mead" (default); 
+   #                   { "BFGS";
+   #                   { "L-BFGS"; 
+   #                   { "CG"; and
+   #                   { "SANN"; 
+   #                 
+   # Output: out       = a list containing inital parameter estimates and other variables 
+   #                     needed as arguments for utility functions 'loglike', 'score',
+   #                     'hessian', 'maximize', and 'process.reults':
+   #                       G     = number pollinator species in network
+   #                       J     = number plant species in network
+   #                       X     = design matrix, (GxJ)xM array of all covariates
+   #                       Y     = vector of length 1x(GxJ) containing the
+   #                               interaction counts 
+   #                       n.g   = total counts for pollinator g, i.e., row sums
+   #                       K     = number of beta coefficients
+   #                       L     = number of dispersion coefficients, 0 for 
+   #                               GCL, 1 for delta.g and rho.g, >=2 for dfunc (gamma.l)
+   #                       M     = total number of coefficients, i.e., K + L
+   #                       bstar = a vector of length 1xM which contains the 
+   #                               the initial estimates of the model parameters
+   #                       Coefficients = coefficient names
+   #                       disp = as defined above 
+   #                       method = as defined above 
+   #                        
+   #####################################################################
+
+   # extract/create necessary input variables
+   G=length(unique(data$poll))
+   J=length(unique(data$plant))
+   vars=model.frame(formula,data)
+   Y=as.vector(vars[,1])
+   n.g=rowSums(matrix(Y,G,J,byrow=T))
+
+   # DM Model - delta.g and rho.g parameterization
+   if(disp=="dconst" || disp=="rconst"){
+      #create design matrix X
+      const=rep(1,(G*J))
+      X=cbind(vars[,-1],const)
+      X=as.matrix(X)
+      #define number of beta.k parameters (K), set number of dispersion 
+      #parameters to 1 (L), and total number of parameters (M)
+      K=ncol(vars[,-1])
+      L=1
+      M=K+L
+      #extract coefficient names
+      coefficients=names(as.data.frame(X))
+      #run poisson regression
+      pars=glm(formula,data,family=poisson)
+      #extract initial parameter estimates and reorder
+      init.coefs=as.vector(pars$coef)
+      coefs.ordered=c(init.coefs[-1],init.coefs[1])
+      init.pars=coefs.ordered
+   }
+
+   # DM Model - dfunc parameterization
+   if(disp=="dfunc"){ 
+      #define number of beta.k parameters (K), number of dispersion 
+      #parameters (L), and total number of parameters (M)
+      M=ncol(vars[,-1])+1
+      L=length(delta.vars)
+      K=M-L
+      #create design matrix X
+      const=rep(1,(G*J))
+      X=cbind(vars[,-1],const)
+      X=as.matrix(X)
+      #extract coefficient names
+      coefficients=names(as.data.frame(X))
+      #run poisson regression
+      pars=glm(formula,data,family=poisson)
+      #extract initial parameter estimates and reorder
+      init.coefs=as.vector(pars$coef)
+      coefs.ordered=c(init.coefs[-1],init.coefs[1])
+      coefs.ordered[is.na(coefs.ordered)]=0
+      init.pars=coefs.ordered
+   }
+ 
+   # GCL model
+   if(disp=="none"){ 
+      X=as.matrix(vars[,-1])
+      #define number of beta.k parameters (K), set number of dispersion 
+      #parameters to 0 (L), and total number of parameters (M)
+      K=ncol(X)
+      L=0
+      M=K+L
+      #extract coefficient names
+      coefficients=names(as.data.frame(X))
+      #run poisson regression
+      pars=glm(formula,data,family=poisson)
+      #extract initial parameter estimates and reorder
+      init.coefs=as.vector(pars$coef)
+      coefs.ordered=init.coefs[-1]
+      init.pars=coefs.ordered
+   }
+
+
+   out=list(G=G,J=J,Y=Y,n.g=n.g,X=X, K=K, L=L, M=M, bstar=init.pars, Coefficients=coefficients, disp=disp, method=method)
+   return(out)
+
+}
+
+
+maximize=function(vars){
+
+   #############################################################################
+   # This function uses R's optim function to maximize the GCL/DM likelihoods 
+   # using a quasi-newton optimization method.  The log-likelihood, 
+   # parameter estimates, associated standard errors, and any error 
+   # messages are printed. This function calls to utility functions
+   # 'loglike', 'score', and 'hessian'. Note: maximum iterations are set to 10,000.
+   # Inputs are passed from utility function 'init.par'.
+   #
+   # Input:  vars  = a list containing vaiables and parameter estimates 
+   #                 needed as inputs for the 'optim' function: 
+   #                 G      = number pollinator species in network
+   #                 J      = number plant species in network
+   #                 X      = design matrix, (GxJ)xM array of all covariates
+   #                 Y      = vector of length 1x(GxJ) containing the
+   #                          interaction counts 
+   #                 n.g    = total counts for pollinator g, i.e., row sums
+   #                 K      = number of beta coefficients
+   #                 L      = number of dispersion coefficients, 0 for 
+   #                          GCL, 1 for delta.g and rho.g, >=2 for dfunc
+   #                 M      = total number of coefficients, i.e., K + L
+   #                 Coefficients = coefficient names
+   #                 bstar  = a vector of length 1xM which contains the 
+   #                          the initial estimates of the model parameters
+   #  	             disp   = dispersion structure to use:
+   #                        { "none"   = no dispersion; 
+   #                        { "dconst" = delta.g constant;
+   #                        { "dfunc"  = delta.g function of Z; 
+   #                        { "rconst" = rho.g constant
+   #                 method = quasi-Newton optimization method to be used:
+   #                        { "Nelder-Mead" (default); 
+   #                        { "BFGS";
+   #                        { "L-BFGS"; 
+   #                        { "CG"; and
+   #                        { "SANN"; 
+   #                 
+   # Output: out   = a list containing final parameter estimates and other variables 
+   #                 needed as arguments for utility function 'process.results':
+   #                   bstar         = a vector of length 1xM which contains the 
+   #                                   the final parameter estimates 
+   #                   I             = hessian matrix
+   #                   Loglikelihood = final log-likelihood value
+   #                   Convergence   = convergence code return from 'optim' function
+   #                   error         = any errors from the optimization procedure 
+   ##################################################################################
+
+   # extract necessary input variables  
+   bstar=vars$bstar
+   disp=vars$disp
+   method=vars$method
+
+   # DM Model - rho.g parameterization
+   if(disp=="rconst"){
+      #rho starting value set to 0.1   
+      bstar=c(vars$bstar[1:vars$K],0.1)
+
+      # estimate model parameters 
+      out=optim(bstar,fn=loglike,gr=score,vars,disp=disp,hessian=T,method=method,control=c(maxit=10000))
+
+      # check if hessian matrix is invertible, if so run function 'hessian'
+      err=try(sqrt(diag(solve(out$hessian))),silent=T)
+      if(is(err,"try-error")){
+      out$hessian=hessian(bstar=out$par,vars,disp)
+      }
+   }
+
+   # DM Model - dconst and dfunc parameterizations
+   if(disp=="dconst" || disp=="dfunc"){
+      #estimate model parameters 
+      out=optim(bstar,fn=loglike,gr=score,vars,disp=disp,hessian=T,method=method,control=c(maxit=10000))
+   }
+
+   # GCL model
+   if(disp=="none"){
+      #estimate model parameters 
+      out=optim(bstar,fn=loglike,gr=score,vars,disp=disp,hessian=T,method=method,control=c(maxit=10000))
+   }
+
+   final.pars=list(bstar=out$par,I=out$hessian, LogLikelihood=-out$value, Convergence=out$convergence, error=out$message)
+
+   return(final.pars)
+}
+
+
+
+loglike=function(bstar,vars,disp){
+
+   ####################################################################
+   # This function computes the log-likelihood for the GCL and DM models. 
+   # This function is used as an argument in R's 'optim'
+   # function, i.e., 'fn' argument.  Inputs are passed from
+   # utility function 'maximize'.
+   #
+   # Input:  bstar = a vector of length 1xM which contains the 
+   #                the initial/current estimates of the model
+   #                parameters, i.e., beta.k, delta.g, rho.g
+   #         vars  = a list containing additional arguments passed
+   #                to this function to compute the elements of 
+   #                the score vector:
+   #                G   = number pollinator species in network
+   #                J   = number plant species in network
+   #                X   = design matrix, (GxJ)xM matrix of all covariates,
+   #                      i.e., X and Z
+   #                Y   = vector of length 1x(GxJ) containing the
+   #                      interaction counts 
+   #                n.g = total counts for pollinator g, i.e., row sums
+   #                K   = number of beta coefficients
+   #                L   = number of dispersion coefficients, 0 for 
+   #                      GCL, 1 for delta.g and rho.g, >=2 for dfunc
+   #                M   = total number of coefficients, i.e., K + L
+   #  	     disp  = dispersion structure to use:
+   #                { "none"   = no dispersion; 
+   #                { "dconst" = delta.g constant;
+   #                { "dfunc"  = delta.g function of Z; 
+   #                { "rconst" = rho.g constant.
+   #                 
+   # Output: ll    = current value of the log-likelihood 
+   #####################################################################
+
+   # extract necessary input variables
+   G=vars$G
+   J=vars$J
+   K=vars$K
+   M=vars$M
+   L=vars$L
+   Y=vars$Y
+   n.g=vars$n.g
+   X=vars$X
+
+   # DM Model - rho.g parameterization 
+   if(disp=="rconst"){
+
+    # extract initial/current estimate of rho.g
+    r=bstar[(K+1):M]
+    # subset design matrix to covariates for beta.k only 
+    X=as.matrix(X[,-M])
+    # extract initial/current estimate of beta.k
+    bstar=bstar[-M]
+    # create theta, a constant value which is a function of rho.g
+    theta=log(r/(1-r))
+    # create exp(b'x) matrix - multiply each covariate by its corresponding
+    # beta value and exponentiate
+    ebx=exp(X%*%bstar)
+
+    #compute likelihood
+     j=1
+     ll.g=NULL
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.ebx=ebx[j:(g*J)]
+         my.pgj=my.ebx/sum(my.ebx)
+         term2=(lgamma((my.pgj/exp(theta))+my.Y)-lgamma(my.pgj/exp(theta))-lgamma(my.Y+1))
+         term1=(lgamma(n.g[g]+1)+lgamma((1/exp(theta)))-lgamma((1/exp(theta))+n.g[g]))
+         ll.g[g]=term1+sum(term2)
+         j=j+J
+         }
+       ll=-sum(ll.g)
+   }
+
+   # DM Model - dconst and dfunc parameterizations
+   if(disp=="dconst" || disp=="dfunc"){
+
+    # create exp(b'x) matrix - multiply each covariate by its corresponding
+    # beta value and exponentiate
+    X=as.matrix(X)
+    ebx=exp(X%*%bstar)
+
+    #compute likelihood
+     j=1
+     ll.g=NULL
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.ebx=ebx[j:(g*J)]
+         term2=(lgamma(my.ebx+my.Y)-lgamma(my.ebx)-lgamma(my.Y+1))
+         term1=(lgamma(n.g[g]+1)+lgamma(sum(my.ebx))-lgamma(sum(my.ebx)+n.g[g]))
+         ll.g[g]=term1+sum(term2)
+         j=j+J
+         }
+       ll=-sum(ll.g)
+   }
+
+   # GCL model
+   if(disp=="none"){
+
+    # create exp(b'x) matrix - multiply each covariate by its corresponding
+    # beta value and exponentiate
+    X=as.matrix(X)
+    ebx=exp(X%*%bstar)
+
+    #compute likelihood
+     j=1
+     ll.g=NULL
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.ebx=ebx[j:(g*J)]
+         my.pgj=my.ebx/sum(my.ebx)
+         term1=my.Y*log(my.pgj)
+         ll.g[g]=sum(term1)
+         j=j+J
+         }
+       ll=-sum(ll.g)
+   }
+
+
+   return(ll)
+}
+
+score=function(bstar,vars,disp){
+   ####################################################################
+   # This function computes the first partial derivatives of  
+   # the log-likelihood function (score vector) for the GCL and DM models. 
+   # This function is used as an argument in R's 'optim'
+   # function, i.e., 'gr' argument.  Inputs are passed from
+   # utility function 'maximize'.
+   #
+   # Input:  bstar = a vector of length 1xM which contains the 
+   #                the initial/current estimates of the model
+   #                parameters, i.e., beta.k, delta.g, rho.g
+   #         vars  = a list containing additional arguments passed
+   #                to this function to compute the elements of 
+   #                the score vector:
+   #                G   = number pollinator species in network
+   #                J   = number plant species in network
+   #                X   = design matrix, (GxJ)xM array of all covariates
+   #                Y   = vector of length 1x(GxJ) containing the
+   #                      interaction counts 
+   #                n.g = total counts for pollinator g, i.e., row sums
+   #                K   = number of beta coefficients
+   #                L   = number of dispersion coefficients, 0 for 
+   #                      GCL, 1 for delta.g and rho.g, >=2 for dfunc
+   #                M   = total number of coefficients, i.e., K + L
+   #  	     disp  = dispersion structure to use:
+   #                { "none"   = no dispersion; 
+   #                { "dconst" = delta.g constant;
+   #                { "dfunc"  = delta.g function of Z; 
+   #                { "rconst" = rho.g constant.
+   #                 
+   # Output: U     = vector of length 1xM of partial first derivatives 
+   #####################################################################
+         
+   # extract necessary input variables
+   G=vars$G
+   J=vars$J
+   K=vars$K
+   M=vars$M
+   L=vars$L
+   Y=vars$Y
+   n.g=vars$n.g
+   X=vars$X
+
+   # create final U vector
+   U.bstar=rep(0,M)
+
+   # DM Model - rho.g parameterization
+   if(disp=="rconst"){
+
+   # extract initial/current estimate of rho.g
+   r=bstar[(K+1):M]
+   # subset design matrix to covariates for beta.k only 
+   X=as.matrix(X[,-M])
+   # extract initial/current estimate of beta.k
+   bstar=bstar[-M]
+   # create theta, a constant value which is a function of rho.g
+   theta=log(r/(1-r))
+   # create exp(b'x) matrix - multiply each covariate by its corresponding
+   # beta value and exponentiate
+   ebx=exp(X%*%bstar)
+   m=1
+
+   # first derviatives for beta.k
+   for (k in 1:K){
+     j=1
+     xebx=X[,k]*ebx
+     U.bstar.g=NULL
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.x=X[j:(g*J),k]
+         my.ebx=ebx[j:(g*J)]
+         my.xebx=xebx[j:(g*J)]
+         my.pgj=my.ebx/sum(my.ebx)
+         term1=(1/exp(theta))*(digamma(my.pgj/exp(theta)+my.Y)-digamma(my.pgj/exp(theta)))
+         term2=my.ebx*(my.x*sum(my.ebx)-sum(my.xebx))/(sum(my.ebx)^2)
+         U.bstar.g[g]=sum(term1*term2)
+         j=j+J
+         }
+       U.bstar[m]=sum(U.bstar.g)
+       m=m+1
+       }
+
+
+   # first derivatives for rho.g
+   for (l in 1:L){
+     j=1
+     U.rho.g=NULL
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.ebx=ebx[j:(g*J)]
+         my.pgj=my.ebx/sum(my.ebx)
+         term1=-r[l]^(-2)*digamma(1/exp(theta))+r[l]^(-2)*digamma((1/exp(theta))+n.g[g])
+         term2=-my.pgj*r[l]^(-2)*digamma(my.pgj/exp(theta)+my.Y)+my.pgj*r[l]^(-2)*digamma(my.pgj/exp(theta))
+         U.gamma.g[g]=term1+sum(term2)
+         j=j+J
+         }
+       U.bstar[m]=sum(U.rho.g)
+       l=l+1
+       }
+   }
+
+   # DM Model - dconst and dfunc parameterizations
+   if(disp=="dconst" || disp=="dfunc"){
+
+
+   # create exp(b'x) matrix - multiply each covariate value in X by its corresponding 
+   # beta value and exponentiate
+   X=as.matrix(X)
+   ebx=exp(X%*%bstar)
+
+   for (m in 1:M){
+     j=1
+     xebx=X[,m]*ebx
+     U.bstar.g=NULL
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.ebx=ebx[j:(g*J)]
+         my.xebx=xebx[j:(g*J)]
+         term1=sum(my.xebx)*(digamma(sum(my.ebx))-digamma(sum(my.ebx)+n.g[g]))
+         term2=my.xebx*(digamma(my.ebx+my.Y)-digamma(my.ebx))
+         U.bstar.g[g]=term1+sum(term2)
+         j=j+J
+         }
+       U.bstar[m]=sum(U.bstar.g)
+       }
+   }
+
+   # GCL model
+   if(disp=="none"){
+
+   # create exp(b'x) matrix - multiply each covariate by its corresponding
+   # beta value and exponentiate
+   X=as.matrix(X)
+   ebx=exp(X%*%bstar)
+
+   for (m in 1:M){
+     j=1
+     xebx=X[,m]*ebx
+     U.bstar.g=NULL
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.x=X[j:(g*J),m]
+         my.ebx=ebx[j:(g*J)]
+         my.xebx=xebx[j:(g*J)]
+         my.pgj=my.ebx/sum(my.ebx)
+         term1=my.Y/my.pgj
+         term2=my.ebx*(my.x*sum(my.ebx)-sum(my.xebx))/(sum(my.ebx)^2)
+         U.bstar.g[g]=sum(term1*term2)
+         j=j+J
+         }
+       U.bstar[m]=sum(U.bstar.g)
+       }
+   }
+
+   U=-1*U.bstar
+   return(U)
+}
+
+
+hessian=function(bstar,vars,disp){
+   ####################################################################
+   # This function computes the second partial derivatives of  
+   # the log-likelihood function (hessian matrix) for the DM model parameterized  
+   # in terms of rho.g. This function is only called when R's 'optim' function
+   # is unable to compute the hessian matrix using a finte-difference approximation.
+   # Inputs are passed from utility function 'maximize'.
+   #
+   # Input:  bstar = a vector of length 1xM which contains the 
+   #                the initial/current estimates of the model
+   #                parameters, i.e., beta.k, delta.g, gamma.l
+   #         vars  = a list containing additional arguments passed
+   #                to this function to compute the elements of 
+   #                the score vector:
+   #                G   = number pollinator species in network
+   #                J   = number plant species in network
+   #                X   = design matrix, (GxJ)xM array of all covariates
+   #                Y   = vector of length 1x(GxJ) containing the
+   #                      interaction counts 
+   #                n.g = total counts for pollinator g, i.e., row sums
+   #                K   = number of beta coefficients
+   #                L   = number of dispersion coefficients, 0 for 
+   #                      GCL, 1 for delta.g and rho.g, >=2 for dfunc
+   #                M   = total number of coefficients, i.e., K + L
+   #  	     disp  = dispersion structure to use:
+   #                { "none"   = no dispersion; 
+   #                { "dconst" = delta.g constant;
+   #                { "dfunc"  = delta.g function of Z; 
+   #                { "rconst" = rho.g constant.
+   #                 
+   # Output: hess = an MxM matrix of first partial derivatives 
+   #####################################################################
+
+   # extract necessary input variables
+   G=vars$G
+   J=vars$J
+   K=vars$K
+   M=vars$M
+   L=vars$L
+   Y=vars$Y
+   n.g=vars$n.g
+   X=as.matrix(vars$X)
+
+   # create final hess matrix and temporary beta.k matrix
+   hess=matrix(0,M,M)
+   beta.matrix=matrix(0,K,K)
+   # extract initial/current estimate of rho.g
+   r=bstar[M]
+   # subset design matrix to covariates for beta.k only 
+   X=as.matrix(X[,-((K+1):M)])
+   # extract initial/current estimate of beta.k
+   bstar=bstar[-((K+1):M)]
+   # create theta, a constant value which is a function of rho.g
+   theta=log(r/(1-r))
+   # create exp(b'x) matrix - multiply each covariate by its corresponding
+   # beta value and exponentiate
+   ebx=exp(X%*%bstar)
+
+   #compute rho.g diagonal elements
+   if (L==1){
+     j=1
+     rho.g=NULL
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.ebx=ebx[j:(g*J)]
+         my.pgj=my.ebx/sum(my.ebx)
+
+         term1=2*r^(-3)*digamma((1/exp(theta)))+
+               r^(-4)*trigamma((1/exp(theta)))-
+               2*r^(-3)*digamma((1/exp(theta))+n.g[g])-
+               r^(-4)*trigamma((1/exp(theta))+n.g[g])
+
+         term2=2*my.pgj*r^(-3)*digamma((my.pgj/exp(theta))+my.Y)+
+               my.pgj^2*r^(-4)*trigamma((my.pgj/exp(theta))+my.Y)-
+               2*my.pgj*r^(-3)*digamma((my.pgj/exp(theta)))-
+               my.pgj^2*r^(-4)*trigamma((my.pgj/exp(theta)))
+
+         rho.g[g]=term1+sum(term2)
+         j=j+J
+         }
+       #populate hessian matrix with rho.g element
+       hess[M,M]=sum(rho.g)
+   }
+
+
+
+
+   #compute beta.k diagonal elements
+     beta.diag=NULL
+     for (k in 1:K){
+     beta.g=NULL
+       j=1
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.ebx=ebx[j:(g*J)]
+         my.x=X[j:(g*J),k]
+         my.pgj=my.ebx/sum(my.ebx)
+
+         term1=(1/exp(theta))^2*(trigamma((my.pgj/exp(theta))+my.Y)-trigamma(my.pgj/exp(theta)))         
+
+         term2=(my.x*my.ebx/sum(my.ebx))-(sum(my.x*my.ebx)*my.ebx/(sum(my.ebx))^2)
+
+         term3=(1/exp(theta))*(digamma((my.pgj/exp(theta))+my.Y)-digamma(my.pgj/exp(theta)))
+
+         term4=((my.x^2*my.ebx)/sum(my.ebx))-
+               (my.x*my.ebx*sum(my.x*my.ebx)/(sum(my.ebx))^2)-
+               (my.x*my.ebx*sum(my.x*my.ebx)+my.ebx*sum(my.x^2*my.ebx)/(sum(my.ebx))^2)+
+               2*(my.ebx*(sum(my.x*my.ebx)^2)/(sum(my.ebx))^3)
+
+
+         beta.g[g]=sum(term1*(term2)^2)     
+         j=j+J
+       }
+    beta.diag[k]=sum(beta.g)
+
+    }
+
+   #populate beta.k matrix with beta.k diagonal elements
+   diag(beta.matrix)=beta.diag
+
+
+   #compute beta.k off diagonal elements, i.e., upper triangular beta.k elements
+     beta.off=NULL
+     for (k in 1:(K-1)){
+     betaoff.g=NULL
+       j=1
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.ebx=ebx[j:(g*J)]
+         my.xk=X[j:(g*J),k]
+         my.xr=X[j:(g*J),(k+1)]
+         my.pgj=my.ebx/sum(my.ebx)
+
+         term1=(1/exp(theta))^2*(trigamma((my.pgj/exp(theta))+my.Y)-trigamma(my.pgj/exp(theta)))         
+
+         term2=my.ebx*(my.xk*sum(my.ebx)-sum(my.xk*my.ebx))/(sum(my.ebx))^2
+
+         term3=my.ebx*(my.xr*sum(my.ebx)-sum(my.xr*my.ebx))/(sum(my.ebx))^2
+
+         term4=(1/exp(theta))*(digamma((1/exp(theta))+n.g[g])-digamma(my.pgj/exp(theta)))
+
+         term5=((my.xk*my.xr*my.ebx)/sum(my.ebx))-
+               (my.xk*my.ebx*sum(my.xr*my.ebx)/(sum(my.ebx))^2)-
+               (my.xr*my.ebx*sum(my.xk*my.ebx)+my.ebx*sum(my.xk*my.xr*my.ebx)/(sum(my.ebx))^2)+
+               2*(my.ebx*(sum(my.xk*my.ebx)*sum(my.xr*my.ebx))/(sum(my.ebx))^3)
+
+
+         betaoff.g[g]=sum(term1*term2*term3)
+
+         j=j+J
+         }
+       beta.off[k]=sum(betaoff.g)
+
+   }
+
+   #create complete beta.k matrix with off diagnol elements
+   beta.matrix[lower.tri(beta.matrix)]=beta.off
+   beta.matrix[upper.tri(beta.matrix)]=beta.off
+
+   #populate hessian matrix with beta.k elements
+   hess[(1:K),(1:K)]=beta.matrix
+
+
+   #compute beta.k/rho.g off diagonal elements
+   if (L==1){
+     betarho=NULL
+     for (k in 1:K){
+       j=1
+       betarho.g=NULL
+       for (g in 1:G){
+         my.Y=Y[j:(g*J)]
+         my.ebx=ebx[j:(g*J)]
+         my.pgj=my.ebx/sum(my.ebx)
+         my.x=X[j:(g*J),k]
+         term1=-r^(-2)*(digamma(my.pgj/exp(theta)+my.Y)-digamma(my.pgj/exp(theta))+
+               my.pgj*(1/exp(theta))*(trigamma(my.pgj/exp(theta)+my.Y)-trigamma(my.pgj/exp(theta))))
+         term2=my.ebx*(my.x*sum(my.ebx)-sum(my.x*my.ebx))/(sum(my.ebx)^2)
+
+         betarho.g[g]=sum(term1*term2)
+         j=j+J
+        }
+   betarho[k]=sum(betarho.g)
+     }
+
+     #populate hessian matrix with beta.k/rho.g elements
+     hess[(1:K),M]=betarho
+     hess[M,(1:K)]=betarho
+
+   }
+
+
+   return(-1*hess)
+}
+
+
+process.results=function(pars,vars){
+
+   #############################################################################
+   # This function compiles and outputs the results of the maximization procedure.
+   # Inputs are passed from utility function 'maximize'.
+   #
+   # Input:  vars        = input list from function 'maximize'
+   #         pars        = output list from funciton 'maximize'
+   #                 
+   # Output: Parameters  = a list containing the final results:
+   #                         Results       = table of final parameter estimates, std errors, 
+   #                                         confidence intervals (CIs), Z-stats, and pvalues 
+   #                         Loglikelihood = final log-likelihood value
+   #                         VarCov        = final MxM Variance-Covariance matrix
+   #                         Convergence   = convergence code return from 'optim' function
+   #                         error         = any errors from the optimization procedure 
+   #                         Estimates     = 1xM vector containing the final parameter 
+   #                                          estimates
+   #                         Std.Error     = 1xM vector containing the final standard 
+   #                                         errors
+   #                         p.value       = 1xM vector containing the coefficient p-values
+   ##################################################################################
+
+
+   # extract coefficient names and final parameter estimates
+   Coefficient=vars$Coefficients
+   Estimate=round(pars$bstar,5)
+
+   # check if hessian matrix is invertible, if not, then set std errors, CIs, etc. to "NA"
+   err=try(sqrt(diag(solve(pars$I))),silent=T)
+      if(is(err,"try-error")){
+      Std.Error=rep("NA",length(Estimate))
+      varcov="NA"
+      Z.Value=rep("NA",length(Estimate))
+      p.value=rep("NA",length(Estimate))
+      Lower=rep("NA",length(Estimate))
+      Upper=rep("NA",length(Estimate))} else
+    
+   # if hessian is invertible, then compute std errors, CIs, etc.     
+         {Std.Error=round(sqrt(diag(solve(pars$I))),5)
+         varcov=solve(pars$I)
+         Z.Value=round(Estimate/Std.Error,3)
+         p.value=round((1-pnorm(abs(Z.Value)))*2,5)
+         Lower=round(Estimate-(1.96*Std.Error),5)
+         Upper=round(Estimate+(1.96*Std.Error),5)}
+
+   # compile results into a table
+   results=cbind(Coefficient,Estimate,Std.Error,Z.Value,p.value,Lower,Upper)
+   results=as.data.frame(results)
+   if(is.null(pars$error)){error="NA"}else{error=pars$error}
+
+   parameters<-list(Results=results, LogLikelihood=pars$LogLikelihood, VarCov=varcov, Convergence=pars$Convergence, error=error, Estimates=Estimate,Std.Error=Std.Error, p.value=p.value)
+
+   return(parameters)
+}
+
+###############################
+## MAIN FUNCTION STARTS HERE ##
+###############################
+
+dirmultreg=function(formula, data, disp, plant, poll, delta.vars=NULL, method="Nelder-Mead"){
+
+   ################################################################################################################
+   # This function computes the maximum likelihood estimates for a Grouped Conditional Logit and Dirichlet 
+   # Multinomial Regression Model.
+   # Input: formula    = a symbolic description of the model to be fitted 
+   #                     which has the form response ~ terms, where response   
+   #                     is the (numeric) response vector and terms is a series 
+   #                     of covariates which specifies a linear predictor for response, 
+   #                     e.g., x1 + x2 indicates all the terms in first together 
+   #                     with all the terms in second. 
+   #        data       = a data set containing the variables in the model as shown above
+   #                     Note these data must be an R object of class 'data.frame'
+   #        disp       = dispersion structure to use:
+   #                   { "none"   = no dispersion; 
+   #                   { "dconst" = delta.g constant;
+   #                   { "dfunc"  = delta.g function of Z; 
+   #                   { "rconst" = rho.g constant.
+   #        plant      = group identifier for plant species
+   #        poll       = group identifier for pollinator species
+   #        delta.vars = specifies the variables used to model dispersion as a function of covariates, default is NULL
+   #        method     = quasi-Newton optimization method to be used:
+   #                   { "Nelder-Mead" (default); 
+   #                   { "BFGS";
+   #                   { "L-BFGS"; 
+   #                   { "CG"; and
+   #                   { "SANN"; 
+   #Output: Out        = output list from function 'process.results' 
+   #################################################################################################################
+
+
+
+   #call to utility function 'init.par' to get initial estimates using a poission regression
+   vars=init.par(formula, data, disp, plant, poll, delta.vars, method)
+
+   #call to utility function 'maximize' for the estimation of model parameters 
+   #Maximize calls to utility functions 'loglike', 'score', and 'hessian'
+   pars=maximize(vars)
+
+   #call to utility function 'process.results' to output a formatted table of GCL/DM regression results  
+   out=process.results(pars,vars)
+
+   return(out)
+
+}
+
+
