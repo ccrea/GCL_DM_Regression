@@ -4,7 +4,7 @@ The program consists of a main function named "dirmultreg" and a series of utili
 
 Here I provide an example of how to use the "dirmultreg" function to analyze the artificial plant and pollinator data sets.  
 
-Copy and paste the R program into a .R script file and load the file into R so that the dirmultreg function is available for use:
+Copy and paste the R program (file "dirmultreg R Program") into a .R script file and load the file into R so that the dirmultreg function is available for use:
 1.  Launch the R console
 2. File -> New Script.  An untitled R Editor window will open.
 3. Paste R program into R Editor.
