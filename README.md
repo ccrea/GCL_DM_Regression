@@ -4,7 +4,7 @@ The program consists of a main function named "dirmultreg" and a series of utili
 
 Here I provide an example of how to use the "dirmultreg" function to analyze the artificial plant and pollinator data sets.  
 
-Copy and paste the R program (file "dirmultreg R Program") into a .R script file and load the file into R so that the dirmultreg function is available for use:
+Copy and paste the R program "dirmultreg R Program" into a .R script file and load the file into R so that the dirmultreg function is available for use:
 
 1.  Launch the R console
 
@@ -18,16 +18,27 @@ Copy and paste the R program (file "dirmultreg R Program") into a .R script file
 source(myfile.R), where the myfile.R argument is a character string giving the path name and file name.  
 
 The data needs to be in this format:
-plant	poll	Y	x1	x2	x3	x4	z1
-1	1	0	1	1	0	0.068115	0.000987
+
+plant poll Y x1 x2 x3 x4 z1
+
+1 1 0 1	1	0	0.068115	0.000987
+
 2	1	0	1	0	0	0.062685	0.177443
+
 3	1	1	1	0	1	0.129319	0.001481
+
 4	1	2	1	0	0	0.003455	0.023445
+
 5	1	1	1	0	1	0.017029	0.047631
+
 6	1	2	1	0	0	0.007404	0.08539
+
 7	1	1	1	0	1	0.293189	0.000247
+
 8	1	3	0	0	0	0.031836	0.000247
+
 9	1	1	0	1	0	0.019743	0.068115
+
 10	1	0	1	0	1	0.000987	0.062685
 
 In this example, plant and poll are group identifiers for plant and pollinator species, respectively, Y is the count or number of interactions recorded for that plant and pollinator pair, x1 – x4 are the associated predictor or covariate values for the plant and pollinator pairs, and z1 is the associated pollinator species covariate used to model dispersion as a function, if needed.
@@ -56,4 +67,4 @@ dirmultreg(formula = Y~x1+x2+x3+x4+z1, data = filename, disp = “dfunc”, plan
 
 In this example, we have added z1 to the formula and delta.vars arguments and specified “Nelder-Mead” for the optimization procedure.  
 
-Artifical plant and pollinator networks can be generated according to a DM regression model using the .R script provided in "simData R program".  This program contains the main funciton "simdata" and utility functions "simX", "simY", and "simRA".  The user specifies the size of the network and the parameter values used to generate the network counts.  The function returns a summary table of counts formatted as described above and can be used as the input for function "dirmultreg".
+Artifical plant and pollinator networks can be generated according to a DM regression model using the .R script provided in "simData R program".  This program contains the main funciton "simdata" and utility functions "simX", "simY", and "simRA".  Use the same steps (1 to 5) decribed above to make the functions available.  The user specifies the size of the network and the parameter values used to generate the network counts.  The function returns a summary table of counts formatted as described above and can be used as the input for function "dirmultreg".
