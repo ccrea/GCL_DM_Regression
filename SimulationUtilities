@@ -1,0 +1,311 @@
+########################################################################
+# Author:  Cathy Crea
+# Updated By: Cathy Crea
+# Last Updated:  18-Aug-2014								
+########################################################################
+
+# Load necessary packages
+library(gtools)
+library(gdata)
+library(fdrtool)
+library(Rlab)
+library(foreign)
+
+simRA<-function(size){
+   ##########################################################
+   # This function generates relative abundances 
+   # for plant species or pollinator species (covariates x4 
+   # and z1 in our simulation study) using the inverse CDF 
+   # method to sample from SAD (Ravasz et al., 2005).  This 
+   # function needs to be used for plants and pollinators 
+   # separately.
+   #
+   # Input: size = number of species in network
+   # Output:  RA = vector of length ‘size’ of relative 
+   #               abundances. 
+   ##########################################################
+
+   Ns <- 15000                             # maximum number species
+   x  <- seq(10,Ns,by=10)
+   Fx <- (Ns*log(x)-x+1)/(Ns*log(Ns)-Ns+1) # cumulative dist’n function for
+                                           # species abundance distribution
+#   abun <- replicate(1:size, min(x[runif(1) <= Fx])) # abundance of i’th species
+   abun <- replicate(size, min(x[runif(1) <= Fx])) # abundance of i’th species
+   RA=abun/sum(abun)                       # relative abundances
+   return(RA)
+}
+
+simX<-function(G, J, K, type, ranges, probs, species="plant"){
+   ################################################################
+   # simX generates K covariates:
+   #
+   # Input:   G = number pollinator species
+   #          J = number plant species
+   #          K = number covariates
+   #       type = type of each covariate
+   #               {"match" = generate animal and plant traits from a
+   #               {          Bernoulli dist'n and check if traits match
+   #               {"geq"   = generate animal and plant traits from a
+   #               {          uniform dist'n and check if aX >= pX
+   #               {"leq"   = generate animal and plant traits from a
+   #               {          uniform dist'n and check if aX <= pX
+   #               {"abund" = generate plant relative abundances
+   #               {"barrier" = generate animal and plant traits from a
+   #               {            uniform (0,1) and check if aX > pX
+   #               {"compnar" = generate animal and plant traits from a
+   #               {            uniform (0,1) and ranges in trait variability
+   #               {            from a uniform (0,0.25), i.e., narrow range,
+   #               {            check if |aX - pX| < 0.5 * (aD + pD)
+   #               {"compmed" = generate animal and plant traits from a
+   #               {            uniform (0,1) and ranges in trait variability
+   #               {            from a uniform (0,0.5), i.e., medium range,
+   #               {            check if |aX - pX| < 0.5 * (aD + pD)
+   #     ranges = range of each "geq" or "leq" covariate (2x2xK array
+   #              with row 1 -> animal ranges, row 2 -> plant ranges) 
+   #      probs = Bernoulli probabilities (2xK array with row 1 -> animals
+   #              and row 2 -> plants)
+   # Output:  X = (GxJ)xK covariate matrix.
+   ################################################################
+
+   X    <- array(0, c(G,J, K))   # initialization
+   ind1 <- 1   # indexes slices of ranges
+   ind2 <- 1   # indexes columns of probs
+   
+   ## setting up trait variables and constructing Boolean linkage rules/abundances
+   for (i in 1:K){
+       itype <- type[i]
+       switch(itype,    # aX = animal trait, pX = plant trait, X = linkage rule/abundance
+          match = {
+	          aX   <- matrix(rbern(G, probs[1,ind1]), G, J, byrow=FALSE) # animal trait
+	          pX   <- matrix(rbern(J, probs[2,ind1]), G, J, byrow=TRUE)  # plant trait
+            X[,,i] <- matrix(as.numeric(aX==pX),G,J,byrow=FALSE)         # traits match
+		      ind1 <- ind1 + 1
+	      },
+		  geq = {
+             aX    <- matrix(runif(G,ranges[1,1,ind2],ranges[1,2,ind2]), G, J, byrow=FALSE)
+             pX    <- matrix(runif(J,ranges[2,1,ind2],ranges[2,2,ind2]), G, J, byrow=TRUE)
+            X[,,i] <- matrix(as.numeric(aX>=pX),G,J,byrow=FALSE)         # traits complementary
+		      ind2 <- ind2 + 1
+		  },
+		  leq = {
+             aX    <- matrix(runif(G,ranges[1,1,ind2],ranges[1,2,ind2]), G, J, byrow=FALSE)
+             pX    <- matrix(runif(J,ranges[2,1,ind2],ranges[2,2,ind2]), G, J, byrow=TRUE)
+            X[,,i] <- matrix(as.numeric(aX<=pX),G,J,byrow=FALSE)         # traits complementary
+		      ind2 <- ind2 + 1
+		  },
+
+		  abund = {
+		    if(species=="plant"){			       
+			  X[,,i] <- matrix(as.numeric(simRA(J)), G, J, byrow=TRUE) # plant relative abundances
+			} else {      
+			  if(species=="poll") X[,,i] <- matrix(as.numeric(simRA(G)), G, J, byrow=FALSE) # pollinator relative abundances
+			}
+		  },
+		  barrier = {
+             aX    <- matrix(runif(G,0,1), G, J, byrow=FALSE)
+             pX    <- matrix(runif(J,0,1), G, J, byrow=TRUE)
+            X[,,i] <- matrix(as.numeric(aX<pX),G,J,byrow=FALSE)         # barrier trait
+		  },
+		  compnar = {
+             aX    <- matrix(runif(G,0,1), G, J, byrow=FALSE)
+             pX    <- matrix(runif(J,0,1), G, J, byrow=TRUE)
+             aD    <- matrix(runif(G,0,0.25), G, J, byrow=FALSE)
+             pD    <- matrix(runif(J,0,0.25), G, J, byrow=TRUE)
+            X[,,i] <- matrix(as.numeric(abs(aX-pX)<0.5*(aD+pD)),G,J,byrow=FALSE)         # narrow range complementary trait
+		  },
+		  compmed = {
+             aX    <- matrix(runif(G,0,1), G, J, byrow=FALSE)
+             pX    <- matrix(runif(J,0,1), G, J, byrow=TRUE)
+             aD    <- matrix(runif(G,0,0.5), G, J, byrow=FALSE)
+             pD    <- matrix(runif(J,0,0.5), G, J, byrow=TRUE)
+            X[,,i] <- matrix(as.numeric(abs(aX-pX)<0.5*(aD+pD)),G,J,byrow=FALSE)         # medium range complementary trait
+		  },
+			  stop("Invalid type specified!") 
+      )
+   }
+   X <- apply(X,3,function(Y){return(unmatrix(Y, byrow=TRUE))})      # reformat X: row = cell, col = covariate
+   colnames(X) <- paste("x",1:K,sep="")
+   rownames(X) <- NULL
+   return(X)
+}
+   
+simY <- function(disp="dconst", beta, gam=NULL, delta=0, rho=NULL, G, J, X=NULL, Z=NULL){
+   #############################################################
+   # This function generates counts in a GxJ plant-pollinator 
+   # network.  Input parameters are:
+   #  disp  = dispersion structure to use:
+   #          { "none"   = no dispersion; 
+   #          { "dconst" = delta.g constant;
+   #          { "dfunc"  = delta.g function of Z; 
+   #          { "rconst" = rho.g constant.
+   #  beta  = K-vector of regression coefficients for X.
+   #  gam   = L-vector of dispersion coefficients for Z.
+   #  delta = constant dispersion value
+   #  rho   = constant intra-correlation value
+   #    G   = number pollinator species in network.
+   #    J   = number plant species in network.
+   #    X   = (GxJ)xK array of fixed covariates (for lambda)
+   #    Z   = (GxJ)x(L-1) array of overdispersion covariates (for delta_g)
+   #
+   # Output: Y = GxJ matrix of interaction counts
+   #             and several input parameters 
+   #############################################################
+
+   # initialize parameters
+   GJ       <- G*J              # total number species pairs
+   plant    <- rep(1:J,G)
+   poll     <- sort(rep(1:G,J))
+   Y        <- NULL
+   lambda   <- NULL
+   lambda_g <- NULL
+
+   # Calculate lambda = exp(beta*X)
+   lambda <- apply(X, 1, function(W){exp(beta%*%as.numeric(W))})
+
+   # Calculate lambda_g = sum lambda across plant species for given g
+   index <- 1
+   for(g in 1:G){
+     lambda_g[index:(g*J)] <- rep(sum(lambda[index:(g*J)]),J)
+     index                 <- index+J
+   }
+
+   if (!is.null(Z)){                      # format covariate Z
+     ztemp <- cbind(rep(1:G,J), Z)        # pollinator species label 
+     ztemp <- ztemp[sort(ztemp[,1]),]     # sort by pollinator species
+     Z     <- cbind(rep(1,GJ),ztemp[,-1]) # design matrix for random effects
+     L     <- ncol(Z)
+     colnames(Z) <- paste("z",0:(L-1),sep="")
+   }
+
+   # Simulate data based on dispersion specified in disp
+   if (disp=="none"){
+      rate <- lambda                       ## rate is a constant
+   } else{
+      deltaginv <- switch(disp, 
+          dconst = 1/delta,	               ## delta.g constant
+	      dfunc  = exp(Z%*%gam),           ## delta.g function of random pollinator effects
+          rconst = ((1-rho)/rho)*lambda_g, ## rho.g is constant ==> theta = (1/rho - 1)
+   	      stop("Invalid dispersion structure specified!") 
+      )  # end of switch statement
+      rate <- rgamma(GJ, deltaginv*lambda, deltaginv)  ## sample rate from gamma dist'n
+   } # end of if-else statement
+   Y <- rpois(GJ, rate)                                ## sample counts from a Poisson dist'n
+	 
+   # Prepare network (interaction matrix of counts) and return with input parameters    
+   network           <- cbind(plant,poll,Y,X,Z)
+   colnames(network) <- c("plant","poll","Y",colnames(X),colnames(Z))
+   results           <- list(X=X,Y=Y, Y.matrix= matrix(Y,G,J,byrow=TRUE), 
+                       network=network, delta=delta, beta=beta, gam=gam,rho=rho)
+   return(results)
+}
+
+
+###############################
+## MAIN FUNCTION BEGINS HERE ##
+###############################
+
+   ############################################################
+   # This function randomly generates R artificial pollination networks  
+   # according to a Dirichlet-multinomial regression model. All model parameters
+   # need to be specified a priori.  For each r network, a list is   
+   # returned which contain: a summary table of network counts and the  
+   # covariates used to generate the network, the beta values, and the dispersion  
+   # parameter values.  Input parameters are:
+   #
+   #        R = number artificial networks to generate
+   #        J = number plant species
+   #        K = number fixed effects (betas)
+   #        L = number random effects (number of gammas), 
+   #    disp  = dispersion structure to use:
+   #            { "none"   = no dispersion; 
+   #            { "dconst" = delta.g constant;
+   #            { "dfunc"  = delta.g function of Z; 
+   #            { "rconst" = rho.g constant.
+   #    delta = constant dispersion value (for disp="dconst")
+   #    rho   = constant intra-correlation value (for disp="rconst")
+   #    Xtype = type of each covariate
+   #            {"match"   = generate animal and plant traits from a
+   #            {            Bernoulli dist'n and check if traits match
+   #            {"geq"     = generate animal and plant traits from a
+   #            {            uniform dist'n and check if aX >= pX
+   #            {"leq"     = generate animal and plant traits from a
+   #            {            uniform dist'n and check if aX <= pX
+   #            {"abund"   = generate plant relative abundances
+   #            {"barrier" = generate animal and plant traits from a
+   #            {            uniform (0,1) and check if aX > pX
+   #            {"compnar" = generate animal and plant traits from a
+   #            {            uniform (0,1) and ranges in trait variability
+   #            {            from a uniform (0,0.25), i.e., narrow range,
+   #            {            check if |aX - pX| < 0.5 * (aD + pD)
+   #            {"compmed" = generate animal and plant traits from a
+   #            {            uniform (0,1) and ranges in trait variability
+   #            {            from a uniform (0,0.5), i.e., medium range,
+   #            {            check if |aX - pX| < 0.5 * (aD + pD)
+   #
+   #  Xranges = range of each "geq" or "leq" covariate (2x2xK array
+   #            with row 1 -> animal ranges, row 2 -> plant ranges) 
+   #            e.g. myrng <- array(matrix(c(0,10),2,2,byrow=T), c(2,2,K))
+   #   Xprobs = Bernoulli probabilities (2xK array with row 1 for animals
+   #              and row 2 for plants)
+   #            e.g. probs <- matrix(c(0.35,0.65),2,K)
+   #
+   # Output:  R (GxJ) artificial networks
+   #
+   # This function calls utility functions simRA, simX, and simY.
+   ############################################################
+
+simData <- function(R, J, G, K, beta, L, gamma1=NULL, disp, delta=NULL, rho=NULL, 
+                    Xtype, Xranges=NULL, Xprobs=NULL, Ztype=NULL, Zranges=NULL, Zprobs=NULL) {
+
+  
+  GJ   <- G*J                                      # network size
+
+  # Generate parameter values for fixed and random effects
+  #beta  <- round(runif(K,blo,bhi),2)                        #   beta ~ uniform(blo,bhi)
+  #if("dfunc" %in% disp){
+  #     gamma1<- round(runif(L,glo,ghi),2)      # gamma1 ~ uniform(glo,ghi)  ###########
+  #} else gamma1 <- NULL
+  
+  #Create vector of average network counts for summary table
+  C    <- length(disp)
+  data <- list()
+
+  do.one <- function(r){
+    X      <- simX(G, J, K, Xtype, Xranges, Xprobs, species="plant")              # generate covariates X 
+    if(csdisp=="dfunc"){
+  	   Z      <-  simX(G, J, L-1, Ztype, Zranges, Zprobs, species="poll")         # generate covariates Z 
+       counts <- simY(disp=csdisp, beta, gamma1, delta, rho, G, J, X, Z)$network  # generate counts matrix
+    } else{
+       Z      <- NULL
+	   counts <- simY(disp=csdisp, beta, gamma1, delta, rho, G, J, X)$network             # generate counts matrix
+    }
+    cnames <- c("r", colnames(counts))
+    counts <- cbind(rep(r, GJ),counts)
+    colnames(counts) <- cnames
+    return(counts)
+  }	
+
+  #Start the loop for each case/scenario
+  if(C==1){
+    csdisp <- disp
+	data   <- lapply(1:R, do.one)
+  } else{
+    for(cs in 1:C){
+      csdisp     <- disp[cs]
+	  cat("cs: ",cs,"\r disp=", csdisp,"\n")
+	  data[[cs]] <- lapply(1:R, do.one)
+    }
+  }
+  output       <- NULL
+  output$data  <- data
+  output$beta  <- beta
+  output$gamma <- gamma1
+  output$delta <- delta
+  output$rho   <- rho
+  
+  return(output)
+}
+
+
+
+
