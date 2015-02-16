@@ -271,7 +271,7 @@ simData <- function(R, J, K, L, disp, beta, delta=NULL, rho=NULL, gamma1=NULL,
   C    <- length(disp)
   data <- list()
 
-  do.one <- function(r){
+  do_one <- function(r){
     X      <- simX(G, J, K, Xtype, Xranges, Xprobs, species="plant")              # generate covariates X 
     if(csdisp=="dfunc"){
   	 #  Z      <-  simX(G, J, L-1, Ztype, Zranges, Zprobs, species="poll")         # generate covariates Z 
@@ -290,12 +290,12 @@ simData <- function(R, J, K, L, disp, beta, delta=NULL, rho=NULL, gamma1=NULL,
   #Start the loop for each case/scenario
   if(C==1){
     csdisp <- disp
-	data   <- lapply(1:R, do.one)
+	data   <- lapply(1:R, do_one)
   } else{
     for(cs in 1:C){
       csdisp     <- disp[cs]
 	  cat("cs: ",cs,"\r disp=", csdisp,"\n")
-	  data[[cs]] <- lapply(1:R, do.one)
+	  data[[cs]] <- lapply(1:R, do_one)
     }
   }
   output       <- NULL
