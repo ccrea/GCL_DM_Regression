@@ -145,7 +145,7 @@ simY <- function(disp="dconst", beta, gam=NULL, delta=0, rho=NULL, G, J, X=NULL,
    #    G   = number pollinator species in network.
    #    J   = number plant species in network.
    #    X   = (GxJ)xK array of fixed covariates (for lambda)
-   #    Z   = (GxJ)x(L-1) array of overdispersion covariates (for delta_g)
+   #    Z   = (GxJ)x(L-1) array of overdispersion covariates (for dfunc)
    #
    # Output: Y = GxJ matrix of interaction counts
    #             and several input parameters 
@@ -223,7 +223,8 @@ simY <- function(disp="dconst", beta, gam=NULL, delta=0, rho=NULL, G, J, X=NULL,
    #            { "rconst" = rho.g constant.
    #    delta = constant dispersion value (for disp="dconst")
    #    rho   = constant intra-correlation value (for disp="rconst")
-   #    Xtype = type of each covariate
+   #    gamma1   = delta as a function of covariates (for disp="dfunc")
+   #    Xtype/Ztype = type of each covariate
    #            {"match"   = generate animal and plant traits from a
    #            {            Bernoulli dist'n and check if traits match
    #            {"geq"     = generate animal and plant traits from a
@@ -247,25 +248,25 @@ simY <- function(disp="dconst", beta, gam=NULL, delta=0, rho=NULL, G, J, X=NULL,
    #            e.g. myrng <- array(matrix(c(0,10),2,2,byrow=T), c(2,2,K))
    #   Xprobs = Bernoulli probabilities (2xK array with row 1 for animals
    #              and row 2 for plants)
-   #            e.g. probs <- matrix(c(0.35,0.65),2,K)
    #
    # Output:  R (GxJ) artificial networks
    #
    # This function calls utility functions simRA, simX, and simY.
    ############################################################
 
-simData <- function(R, J, G, K, beta, L, gamma1=NULL, disp, delta=NULL, rho=NULL, 
-                    Xtype, Xranges=NULL, Xprobs=NULL, Ztype=NULL, Zranges=NULL, Zprobs=NULL) {
+simData <- function(R, J, K, L, disp, beta, delta=NULL, rho=NULL, gamma1=NULL,   
+                    Xtype, Xranges=NULL, Xprobs=NULL, Ztype=NULL) {
 
   
+  # Network dimensions: number of pollinator species (G) is 
+  # based on a regression of number pollinators on number plants 
+  # for networks available in Interaction Web Database (IWDB)
+  # in 2011.
+  
+  G    <- round((4.4821*log(sqrt(J))+0.5491)^2,0)  # from regressing G on J from IWDB
   GJ   <- G*J                                      # network size
 
-  # Generate parameter values for fixed and random effects
-  #beta  <- round(runif(K,blo,bhi),2)                        #   beta ~ uniform(blo,bhi)
-  #if("dfunc" %in% disp){
-  #     gamma1<- round(runif(L,glo,ghi),2)      # gamma1 ~ uniform(glo,ghi)  ###########
-  #} else gamma1 <- NULL
-  
+ 
   #Create vector of average network counts for summary table
   C    <- length(disp)
   data <- list()
@@ -273,7 +274,8 @@ simData <- function(R, J, G, K, beta, L, gamma1=NULL, disp, delta=NULL, rho=NULL
   do.one <- function(r){
     X      <- simX(G, J, K, Xtype, Xranges, Xprobs, species="plant")              # generate covariates X 
     if(csdisp=="dfunc"){
-  	   Z      <-  simX(G, J, L-1, Ztype, Zranges, Zprobs, species="poll")         # generate covariates Z 
+  	 #  Z      <-  simX(G, J, L-1, Ztype, Zranges, Zprobs, species="poll")         # generate covariates Z 
+  	   Z      <-  simX(G, J, L-1, Ztype,species="poll")         # generate covariates Z 
        counts <- simY(disp=csdisp, beta, gamma1, delta, rho, G, J, X, Z)$network  # generate counts matrix
     } else{
        Z      <- NULL
