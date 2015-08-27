@@ -791,7 +791,7 @@ dirmultreg=function(formula, data, disp, plant, poll, delta.vars=NULL, method="N
           stop("Data set must be of class data.frame")
        }
 
-#check if poll ID and plant ID are variables in data set
+   #check if poll ID and plant ID are variables in data set
        if(!poll %in% names(data) || !plant %in% names(data)){
           stop("Pollinator/Plant ID must be a variable in data and of class character string")
        }
