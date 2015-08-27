@@ -785,6 +785,17 @@ dirmultreg=function(formula, data, disp, plant, poll, delta.vars=NULL, method="N
 
    #call to utility function 'init.par' to get initial estimates using a poission regression
    vars=init.par(formula, data, disp, plant, poll, delta.vars, method)
+   
+   #check if data set is of class data.frame
+       if(class(data)!="data.frame"){
+          stop("Data set must be of class data.frame")
+       }
+
+#check if poll ID and plant ID are variables in data set
+       if(!poll %in% names(data) || !plant %in% names(data)){
+          stop("Pollinator/Plant ID must be a variable in data and of class character string")
+       }
+
 
    #call to utility function 'maximize' for the estimation of model parameters 
    #Maximize calls to utility functions 'loglike', 'score', and 'hessian'
